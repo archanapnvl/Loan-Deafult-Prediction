@@ -1,0 +1,1926 @@
+title: "Final_code"
+572 Assignment 2 - Lending club
+---
+  #Author: Ritu Gangwal, Nikita and Archana
+  
+#This is our final code. First lets run the packages and load some data
+```{r}
+install.packages("tidyverse")
+library(tidyverse)
+install.packages("lubridate")
+library(lubridate)
+install.packages("ggplot2")
+library(ggplot2)
+install.packages("dplyr")
+library(dplyr)
+install.packages("caret")
+library(caret)
+install.packages("e1071")
+library(e1071)
+install.packages("ROCR")
+library(ROCR)
+install.packages("rpart")
+library(rpart)
+install.packages("rsample")
+library(rsample)
+install.packages("ROSE")
+library(ROSE)
+install.packages("corrplot")
+library(corrplot)
+install.packages("ranger")
+library(ranger)
+install.packages("glmnet")
+library(glmnet)
+install.packages("gbm")
+library(gbm)
+
+```
+
+# The lcData4m.csv file contains data on 3 year loans issues in the first 4 months of 2015, which we will use for this analyses. Lets read the data first
+```{r}
+lcdf <- read_csv("C:/Users/nikit/Desktop/IDS_572/Assignment2/data_lendingClub/lcData4m.csv")
+
+str(lcdf)
+```
+
+
+#   Do you have loans with status other than "Fully Paid" or "Charged Off"? 
+```{r}
+#    If so, you should filter these out. For example, if there are some loans with status of "current", 
+#       you can filter these out by lcdf <- lcdf %>%  filter(loan_status !="Current")
+unique(lcdf$loan_status)
+# Hence, no values with Current
+```
+
+
+#interest rate to numeric
+```{r}
+
+# grade and sub grade wise mean interest rate
+# changing int_rate to numeric as it is orginally a character
+lcdf$int_rate <- as.numeric(substr(lcdf$int_rate,1,nchar(lcdf$int_rate)-1))/100
+
+```
+
+
+# annual retun and actual returns calculation:
+
+```{r}
+# calculate annual return and annualised percentage return
+lcdf$Annual_return <- ((lcdf$total_pymnt -lcdf$funded_amnt)/lcdf$funded_amnt)*(12/36)
+Annualreturn_percentage <- ((lcdf$total_pymnt -lcdf$funded_amnt)/lcdf$funded_amnt)*(12/36)*100
+Avg_annual_return<- mean(Annualreturn_percentage) 
+
+# The mean of annual return of all loans is 2.257286
+
+#clculate Avg interest
+AverageInterest= mean(lcdf$int_rate)
+AverageInterestrate= mean(lcdf$int_rate)*100
+# The average interest rate is 11.30456
+
+
+#Some loans are paid back early - find out the actual loan term in months
+#  Since last_pymnt_d is a chr variable, we need to covert it to a date var
+lcdf$last_pymnt_d<-paste(lcdf$last_pymnt_d, "-01", sep = "")
+lcdf$last_pymnt_d<-parse_date_time(lcdf$last_pymnt_d,  "myd")
+
+lcdf$actualTerm <- ifelse(lcdf$loan_status=="Fully Paid", as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d)/dyears(1), 3)
+
+#converting all zeros to NA for valid calculation
+lcdf$actualTerm <- ifelse(lcdf$actualTerm==0, NA, lcdf$actualTerm)
+
+# calculate actual annual return and annualised percentage return
+lcdf$Actual_annual_return <- ((lcdf$total_pymnt -lcdf$funded_amnt)/lcdf$funded_amnt)*(1/lcdf$actualTerm)
+
+Actual_annualreturn_percentage<-((lcdf$total_pymnt-lcdf$funded_amnt)/lcdf$funded_amnt)*(1/lcdf$actualTerm)*100
+
+Actual_avg_annual_return<- mean(Actual_annualreturn_percentage, na.rm=TRUE) 
+
+# The mean of actual annual return of all loans is 4.5750
+
+# total variables increased to 153
+
+
+
+```
+
+
+#Generate some new derived attributes which you think may be useful for predicting default., and explain what these are.
+
+```{r}
+#Some derived attributes
+#Derived attribute: proportion of satisfactory bankcard accounts 
+lcdf$propSatisBankcardAccts <- ifelse(lcdf$num_bc_tl>0, lcdf$num_bc_sats/lcdf$num_bc_tl, 0)
+
+#Another one - lets calculate the length of borrower's history with LC
+#  i.e time between earliest_cr_line and issue_d
+lcdf$earliest_cr_line<-paste(lcdf$earliest_cr_line, "-01", sep = "")
+lcdf$earliest_cr_line<-parse_date_time(lcdf$earliest_cr_line, "myd")
+lcdf$earliest_cr_line<-as.Date(lcdf$earliest_cr_line)
+lcdf$issue_d<-as.Date(lcdf$issue_d)
+lcdf$borrHistory <- as.numeric(difftime(lcdf$issue_d, lcdf$earliest_cr_line)/365)
+
+#or we can use the lubridate functions to precidely handle date-times durations
+#lcdf$borrHistory <- as.duration(lcdf$earliest_cr_line %--% lcdf$issue_d  ) / dyears(1)
+
+# Another new attribute: It is the ratio of total open accounts to total accounts
+lcdf$openacc_ratio <- lcdf$open_acc/lcdf$total_acc
+ggplot(lcdf, aes( x = openacc_ratio)) + geom_histogram() + facet_wrap(~grade)
+
+# Another new attribute: The percentage amount that an investor has committed to the loan borrower
+lcdf$percent_committed <- (lcdf$funded_amnt_inv/lcdf$loan_amnt) * 100
+
+# Another new attribute: proportion of funded_amnt to installments
+lcdf$no.ofinstallments <- lcdf$funded_amnt/lcdf$installment
+ggplot(lcdf,aes(x = grade,y=no.ofinstallments, fill=lcdf$loan_status))+geom_bar(stat = "identity")+ggtitle("Variation of no. of installemts with grade")
+
+# Another new attribute: Ratio of current balance per active account
+lcdf$curbal_open_acc <- lcdf$tot_cur_bal/lcdf$open_acc
+
+#Total variables = 159
+
+```
+
+
+# missing values
+
+```{r}
+
+#Drop vars with all empty values
+lcdf <- lcdf %>% select_if(function(x){!all(is.na(x))})
+# Now the data has only 107 colunms instead of 159
+
+
+#missing value proportions in each column
+colMeans(is.na(lcdf))
+
+# or, get only those columns where there are missing values
+colMeans(is.na(lcdf))[colMeans(is.na(lcdf))>0]
+# there are 21 columns with missing values
+
+#remove variables which have more than, for example, 60% missing values
+nm<-names(lcdf)[colMeans(is.na(lcdf))>0.6]
+lcdf <- lcdf %>% select(-nm)
+# Now we are left with only 98 columns i.e. 10 columns have missing values > 60%
+
+# No. of columns left with missing values < 60%
+missvalues_columns <- colMeans(is.na(lcdf))[colMeans(is.na(lcdf))>0]
+View(missvalues_columns)
+# Hence, we are left with 13 variables with missing values in the set
+
+
+#summary of data in these columns
+nm<- names(lcdf)[colSums(is.na(lcdf))>0]
+summary(lcdf[, nm])
+```
+
+
+#Replicating new values in actual data set
+
+```{r}
+#If we are sure this is working and what we want, can replace the missing values on the lcdf dataset. To be on safer side, we are making a duplicate copy of lcdf as lcdf1 and substituting all the values of lcx.
+lcdf1<-data.frame(lcdf)
+
+lcdf1<- lcdf1 %>% replace_na(list(mths_since_last_delinq = 500))
+
+lcdf1$revol_util<-as.numeric(substr(lcdf1$revol_util,1,nchar(lcdf1$revol_util)-1))
+lcdf1<- lcdf1 %>% replace_na(list(revol_util=median(lcdf1$revol_util, na.rm=TRUE)))
+
+lcdf1<- lcdf1 %>% replace_na(list(bc_open_to_buy=median(lcdf1$bc_open_to_buy, na.rm=TRUE)))
+
+lcdf1<- lcdf1 %>% replace_na(list(bc_util=median(lcdf1$bc_util, na.rm=TRUE)))
+
+lcdf1<- lcdf1 %>% replace_na(list(mo_sin_old_il_acct = 0))
+
+lcdf1<- lcdf1 %>% replace_na(list(mths_since_recent_bc = 0))
+
+lcdf1<- lcdf1 %>% replace_na(list(mths_since_recent_inq = 0))
+
+lcdf1<- lcdf1 %>% replace_na(list(percent_bc_gt_75=median(lcdf1$percent_bc_gt_75, na.rm=TRUE)))
+
+lcdf1<- lcdf1 %>% replace_na(list(num_tl_120dpd_2m = 0))
+
+lcdf1<- lcdf1 %>% replace_na(list(actualTerm = 0))
+
+lcdf1<- lcdf1 %>% replace_na(list(Actual_annual_return = 0)) 
+
+drop <- c("emp_title","last_pymnt_d")
+lcdf1 = lcdf1[,!(names(lcdf1) %in% drop)]
+#now left with 96 variables
+
+
+summary(lcdf1)
+missvalues_columnslcdf1 <- colMeans(is.na(lcdf1))[colMeans(is.na(lcdf1))>0]
+View(missvalues_columnslcdf1)
+
+
+```
+
+
+#Drop some variables for potential leakage
+
+```{r}
+
+#Drop some other columns which are not useful and those which will cause 'leakage'
+vartoremove <- c("funded_amnt_inv","term","pymnt_plan","title","zip_code","addr_state","out_prncp","out_prncp_inv","total_pymnt","total_pymnt_inv","total_rec_prncp","total_rec_int","total_rec_late_fee","collection_recovery_fee","last_pymnt_amnt","last_credit_pull_d","policy_code","debt_settlement_flag","hardship_flag","last_fico_range_high","last_fico_range_low","application_type","recoveries","collections_12_mths_ex_med","initial_list_status","no.ofinstallments")
+View(vartoremove)
+lcdf1 <- lcdf1 %>% select(-vartoremove)               
+
+str(lcdf1)
+```
+
+
+#correlation
+```{r}
+
+lcdf1_num<-lcdf1 %>% select_if(.,is.numeric)
+c<-cor(lcdf1_num)
+
+corrplot(cor(lcdf1_num))
+
+corr_var <- findCorrelation(c, cutoff = 0.8, verbose = TRUE, names = TRUE, exact = TRUE)
+
+#removing highly correlated variables
+
+lcdf1=lcdf1 %>% select(- "open_acc", -"num_sats",-"num_op_rev_tl"    ,-    "num_rev_accts"  ,-      "total_bc_limit"     ,-  "num_bc_sats"      ,-    "num_actv_rev_tl"  ,-    "tot_hi_cred_lim"   ,-  
+"tot_cur_bal"       ,-   "total_rev_hi_lim"   ,-  "total_bal_ex_mort" ,-   "loan_amnt"     ,-      
+"funded_amnt"      ,-    "avg_cur_bal"    ,-      "fico_range_low"    ,-   "mo_sin_old_rev_tl_op",-
+"revol_util"      ,-     "bc_util"         ,-      "num_tl_30dpd")
+
+str(lcdf1)
+
+#removing date variables to get a better decision tree
+lcdf1=lcdf1 %>% select(-earliest_cr_line, -issue_d)
+
+```
+
+
+#Data is ready by this step.
+#Next we will build some  models
+
+```{r}
+
+#Decision tree model
+library(rpart)
+library(rpart.plot)
+
+#to get same results each time we run decision tree
+set.seed(1234)
+
+
+#It can be useful to convert the target variable, loan_status to  a factor variable
+lcdf1$loan_status <- factor(lcdf1$loan_status, levels=c("Fully Paid", "Charged Off"))
+
+
+#convert emp_length to factor -- can order the factors in  a meaningful way
+lcdf1$emp_length <- factor(lcdf1$emp_length, levels=c("n/a", "< 1 year","1 year","2 years", "3 years" ,  "4 years",   "5 years",   "6 years",   "7 years" ,  "8 years", "9 years", "10+ years" ))
+
+#Note - character variables can cause a problem with some model packages, so better to convert all of these to factors
+lcdf1= lcdf1 %>% mutate_if(is.character, as.factor)
+str(lcdf1)
+
+
+```
+
+
+# split the data into training and test data
+
+```{r}
+#split the data into trn, tst subsets
+#70:30 split
+set.seed(1234)
+
+# converting the loan_status to 0 and 1
+lcdf1<-lcdf1 %>% mutate(loan_status=ifelse(loan_status=='Fully Paid',1,0)) #for ques2
+
+lcdf2<-lcdf1 %>% select(-c("Actual_annual_return","Annual_return","actualTerm")) #for ques1
+
+nr<-nrow(lcdf2)
+trnIndex<- sample(1:nr, size = round(0.7*nr), replace=FALSE)
+lcdf2Trn <- lcdf2[trnIndex, ]
+lcdf2Tst <- lcdf2[-trnIndex, ]
+```
+
+
+#resample the training data
+
+```{r}
+#oversapling the training data
+
+os_lcdf2Trn=ovun.sample(loan_status~.,data=lcdf2Trn, method = "over", na.action = na.omit, p=0.5)$data
+dim(os_lcdf2Trn)
+os_lcdf2Trn%>% group_by(loan_status) %>% tally()
+Freq <-table(os_lcdf2Trn$loan_status)
+barplot(Freq, xlab="Loan status",ylab="Frequency")
+
+#undersampling the training data
+us_lcdf2Trn=ovun.sample(loan_status~.,data=lcdf2Trn, method = "under", na.action = na.omit, p=0.5)$data
+dim(us_lcdf2Trn)
+us_lcdf2Trn%>% group_by(loan_status) %>% tally()
+Freq <-table(us_lcdf2Trn$loan_status)
+barplot(Freq, xlab="Loan status",ylab="Frequency")
+
+
+#both under and oversampling the training data
+bs_lcdf2Trn=ovun.sample(loan_status~.,data=lcdf2Trn, method = "both", na.action = na.omit, p=0.5)$data
+dim(bs_lcdf2Trn)
+bs_lcdf2Trn%>% group_by(loan_status) %>% tally()
+Freq <-table(bs_lcdf2Trn$loan_status)
+barplot(Freq, xlab="Loan status",ylab="Frequency")
+```
+
+
+
+# 1. (a1) Develop gradient boosted models to predict loan_status. Experiment with different parameter values, and identify which gives 'best' performance. How do you determine 'best' performance?
+
+#GBM Models
+
+#GBM model 1 - vanilla with 500 trees
+
+```{r}
+install.packages("gbm")
+library(gbm)
+
+lcdf2_gbm1<- gbm(formula=loan_status ~., data=lcdf2Trn, distribution = 'bernoulli',  n.trees=500, shrinkage=0.001, interaction.depth = 5, bag.fraction=0.5, n.minobsinnode = 10, cv.folds = 5, n.cores=12)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm1$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm1$cv.error[min_cverror])
+# 0.898332
+
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm1, method = "cv")
+#n = 500
+
+#hence it is using all trees. So, we need to lower the shrinkage value
+
+#on train data
+scores_gbm1<- predict(lcdf2_gbm1, data=lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm1 <- ifelse(scores_gbm1 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm1 == lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm1), as.factor(lcdf2Trn$loan_status))
+
+#ROC
+pred_1=prediction(scores_gbm1, lcdf2Trn$loan_status)
+roc_1 <-performance(pred_1, "tpr", "fpr")
+plot(roc_1) + abline(a=0, b= 1)
+
+#AUC
+aucPref_1 <-performance(pred_1, "auc")
+aucPref_1@y.values
+
+
+# on test data
+scores_gbm1<- predict(lcdf2_gbm1, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm1 <- ifelse(scores_gbm1 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm1 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm1), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_1=prediction(scores_gbm1, lcdf2Tst$loan_status)
+roc_1 <-performance(pred_1, "tpr", "fpr")
+plot(roc_1) + abline(a=0, b= 1)
+
+#AUC
+aucPref_1 <-performance(pred_1, "auc")
+aucPref_1@y.values
+
+
+```
+
+
+#gbm model 2 - vanilla with 3000 trees and then best iteration tree (more trees and less shrinkage)
+
+```{r}
+
+lcdf2_gbm2<- gbm(formula=loan_status ~., data=lcdf2Trn, distribution = 'bernoulli',  n.trees=3000, shrinkage=0.05, interaction.depth = 1, bag.fraction=0.5, n.minobsinnode = 30, cv.folds = 5, n.cores = 12)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm2$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm2$cv.error[min_cverror])
+# 0.87874
+
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm2, method = "cv")
+best_itr
+#n = 1190
+
+
+#on train data
+scores_gbm2<- predict(lcdf2_gbm2, data=lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm2 <- ifelse(scores_gbm2 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm2 == lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm2), as.factor(lcdf2Trn$loan_status))
+
+#ROC
+pred_2=prediction(scores_gbm2, lcdf2Trn$loan_status)
+roc_2 <-performance(pred_2, "tpr", "fpr")
+plot(roc_2) + abline(a=0, b= 1)
+
+#AUC
+aucPref_2 <-performance(pred_2, "auc")
+aucPref_2@y.values
+
+
+# on test data
+scores_gbm2<- predict(lcdf2_gbm2, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm2 <- ifelse(scores_gbm2 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm2 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm2), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_2=prediction(scores_gbm2, lcdf2Tst$loan_status)
+roc_2 <-performance(pred_2, "tpr", "fpr")
+plot(roc_2) + abline(a=0, b= 1)
+
+#AUC
+aucPref_2 <-performance(pred_2, "auc")
+aucPref_2@y.values
+
+
+```
+
+# GBM Model 3 vanilla model with over sample data
+
+```{r}
+lcdf2_gbm3<- gbm(formula=loan_status ~., data=os_lcdf2Trn, distribution = 'bernoulli',  n.trees=2000, shrinkage=0.05, interaction.depth = 2, bag.fraction=0.8, cv.folds = 5, n.minobsinnode = 30)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm3$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm3$cv.error[min_cverror])
+#1.09315
+
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm3, method = "cv")
+best_itr
+#2000
+
+#on train data
+scores_gbm3<- predict(lcdf2_gbm3, data=os_lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm3 <- ifelse(scores_gbm3 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm3 == os_lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm3), as.factor(os_lcdf2Trn$loan_status))
+
+#ROC
+pred_3=prediction(scores_gbm3, os_lcdf2Trn$loan_status)
+roc_3 <-performance(pred_3, "tpr", "fpr")
+plot(roc_3) + abline(a=0, b= 1)
+
+#AUC
+aucPref_3 <-performance(pred_3, "auc")
+aucPref_3@y.values
+
+
+#on test data
+scores_gbm3<- predict(lcdf2_gbm3, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm3 <- ifelse(scores_gbm3 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm3 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm3), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_3=prediction(scores_gbm3, lcdf2Tst$loan_status)
+roc_3 <-performance(pred_3, "tpr", "fpr")
+plot(roc_3) + abline(a=0, b= 1)
+
+#AUC
+aucPref_3 <-performance(pred_3, "auc")
+aucPref_3@y.values
+
+
+```
+
+
+# grid search for optimal parameters on oversample data
+
+```{r}
+
+paramGrid<-expand.grid (
+treeDepth= c(2,5),
+minNodeSize= c (5,30),
+bagFraction= c(.5, .8, 1),
+shrinkage = c(.01, .05, .1),
+bestTree = 0, # a place to dump results
+minRMSE = 0 # a place to dump results
+)
+nrow(paramGrid)
+
+
+for(i in 1:nrow(paramGrid)) 
+{
+set.seed(123)
+gbm_paramTune<-gbm(
+formula=loan_status~., data=os_lcdf2Trn, distribution = 'bernoulli', n.trees= 1000,
+interaction.depth= paramGrid$treeDepth[i],
+n.minobsinnode= paramGrid$minNodeSize[i],
+bag.fraction= paramGrid$bagFraction[i],
+shrinkage = paramGrid$shrinkage[i],
+train.fraction= 0.7,
+n.cores=NULL,
+)
+
+#add best tree and its RMSE to paramGrid
+paramGrid$bestTree[i] <-which.min(gbm_paramTune$valid.error)
+paramGrid$minRMSE[i] <-sqrt(min(gbm_paramTune$valid.error))
+
+}
+
+```
+
+
+# gbm model 4 with optimal parameters from grid search on over sample data
+
+```{r}
+
+lcdf2_gbm4<- gbm(formula=loan_status ~., data=os_lcdf2Trn, distribution = 'bernoulli',  n.trees=1000, shrinkage=0.1, interaction.depth = 2, bag.fraction=0.5, n.minobsinnode = 5, cv.folds = 5, n.cores = 12)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm4$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm4$cv.error[min_cverror])
+# 1.094265
+ 
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm4, method = "cv")
+best_itr
+#1000
+
+#on train data
+scores_gbm4<- predict(lcdf2_gbm4, data=os_lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm4 <- ifelse(scores_gbm4 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm4 == os_lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm4), as.factor(os_lcdf2Trn$loan_status))
+
+#ROC
+pred_4=prediction(scores_gbm4, os_lcdf2Trn$loan_status)
+roc_4 <-performance(pred_4, "tpr", "fpr")
+plot(roc_4) + abline(a=0, b= 1)
+
+#AUC
+aucPref_4 <-performance(pred_4, "auc")
+aucPref_4@y.values
+
+
+#on test data
+scores_gbm4<- predict(lcdf2_gbm4, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm4 <- ifelse(scores_gbm4 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm4 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm4), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_4=prediction(scores_gbm4, lcdf2Tst$loan_status)
+roc_4 <-performance(pred_4, "tpr", "fpr")
+plot(roc_4) + abline(a=0, b= 1)
+
+#AUC
+aucPref_4 <-performance(pred_4, "auc")
+aucPref_4@y.values
+
+
+```
+
+
+# gbm model 5 with optimal parameters from grid search on under sample data
+
+```{r}
+
+lcdf2_gbm5<- gbm(formula=loan_status ~., data=us_lcdf2Trn, distribution = 'bernoulli',  n.trees=1000, shrinkage=0.1, interaction.depth = 2, bag.fraction=0.5, n.minobsinnode = 5, cv.folds = 5, n.cores = 12)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm5$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm5$cv.error[min_cverror])
+#  1.120371
+
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm5, method = "cv")
+best_itr
+
+#on train data
+scores_gbm5 <- predict(lcdf2_gbm5, data=us_lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm5 <- ifelse(scores_gbm5 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm5 == us_lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm5), as.factor(us_lcdf2Trn$loan_status))
+
+#ROC
+pred_5=prediction(scores_gbm5, us_lcdf2Trn$loan_status)
+roc_5 <-performance(pred_5, "tpr", "fpr")
+plot(roc_5) + abline(a=0, b= 1)
+
+#AUC
+aucPref_5 <-performance(pred_5, "auc")
+aucPref_5@y.values
+
+
+#on test data
+scores_gbm5<- predict(lcdf2_gbm5, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm5 <- ifelse(scores_gbm5 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm5 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm5), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_5=prediction(scores_gbm5, lcdf2Tst$loan_status)
+roc_5 <-performance(pred_5, "tpr", "fpr")
+plot(roc_5) + abline(a=0, b= 1)
+
+#AUC
+aucPref_5 <-performance(pred_5, "auc")
+aucPref_5@y.values
+
+
+```
+
+
+# gbm model 6 with optimal parameters from grid search on both sample data
+
+```{r}
+
+lcdf2_gbm6<- gbm(formula=loan_status ~., data=bs_lcdf2Trn, distribution = 'bernoulli',  n.trees=1000, shrinkage=0.1, interaction.depth = 2, bag.fraction=0.5, n.minobsinnode = 5, cv.folds = 5, n.cores = 12)
+
+# find index for n trees with minimum CV error
+min_cverror <- which.min(lcdf2_gbm6$cv.error)
+
+# get MSE and compute RMSE
+sqrt(lcdf2_gbm6$cv.error[min_cverror])
+# 1.089265
+
+# plot loss function as a result of n trees added to the ensemble
+best_itr=gbm.perf(lcdf2_gbm6, method = "cv")
+best_itr
+#1000
+
+#on train data
+scores_gbm6 <- predict(lcdf2_gbm6, data=bs_lcdf2Trn, n.tree= best_itr, type="response")
+pred_gbm6 <- ifelse(scores_gbm6 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm6 == bs_lcdf2Trn$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm6), as.factor(bs_lcdf2Trn$loan_status))
+
+#ROC
+pred_6=prediction(scores_gbm6, bs_lcdf2Trn$loan_status)
+roc_6 <-performance(pred_6, "tpr", "fpr")
+plot(roc_6) + abline(a=0, b= 1)
+
+#AUC
+aucPref_6 <-performance(pred_6, "auc")
+aucPref_6@y.values
+
+
+#on test data
+scores_gbm6 <- predict(lcdf2_gbm6, newdata=lcdf2Tst, n.tree= best_itr, type="response")
+pred_gbm6 <- ifelse(scores_gbm6 > 0.5, 1, 0)
+
+#accuracy
+mean(pred_gbm6 == lcdf2Tst$loan_status)
+
+#confusion matrix
+confusionMatrix(as.factor(pred_gbm6), as.factor(lcdf2Tst$loan_status))
+
+#ROC
+pred_6 = prediction(scores_gbm6, lcdf2Tst$loan_status)
+roc_6 <-performance(pred_6, "tpr", "fpr")
+plot(roc_6) + abline(a=0, b= 1)
+
+#AUC
+aucPref_6 <-performance(pred_6, "auc")
+aucPref_6@y.values
+
+
+```
+
+
+
+#1.(b1) Develop linear (glm) models to predict loan_status. Experiment with different parameter values and identify which gives 'best' performance. How do you determine 'best' performance? How do you handle variable selection? Experiment with Ridge and Lasso, and show how you vary these parameters, and what performance is observed. 
+
+# GLM Model to predict Loan Status
+
+```{r}
+# Make model.matrix and remove loan_status column. '9' is the column number for loan_status
+x <- model.matrix(loan_status~., lcdf2Trn)[,-9]
+# Loan status is numeric and stored in y
+y <- lcdf2Trn$loan_status
+
+```
+
+#alpha is 1 for lasso and 0 for ridge
+
+#MODEL 1 - LASSO, with lambda.min
+
+```{r}
+#Run glmnet model to get list of lambda values
+M1cv.lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodel1 <- glmnet(x, y, alpha = 1, family = "binomial",
+                lambda = M1cv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodel1)
+
+# Make predictions on the train data for Model 1
+GLM1.train <- model.matrix(loan_status ~., lcdf2Trn)[,-9]
+GLM1Trn_prob <- GLMmodel1 %>% predict(newx = GLM1.train)
+
+#predict for trainset Model, 1 stands for Charged Off
+GLM1Trn_predclass <- ifelse(GLM1Trn_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM1Trn_obsclass <- lcdf2Trn$loan_status
+mean(GLM1Trn_predclass == GLM1Trn_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLM1Trn_predclass), as.factor(lcdf2Trn$loan_status))
+
+#ROC for Model 1 train
+pred_M1=prediction(GLM1Trn_predclass, lcdf2Trn$loan_status)
+roc_M1 <-performance(pred_M1, "tpr", "fpr")
+plot(roc_M1) + abline(a=0, b= 1)
+
+#AUC for Model 1 train
+aucPref_M1 <-performance(pred_M1, "auc")
+aucPref_M1@y.values
+
+# Make predictions on the test data for Model 1
+GLM1.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLM1Tst_prob <- GLMmodel1 %>% predict(newx = GLM1.test)
+#1 stands for Charged Off
+GLM1Tst_predclass <- ifelse(GLM1Tst_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM1Tst_obsclass <- lcdf2Tst$loan_status
+mean(GLM1Tst_predclass == GLM1Tst_obsclass)
+
+#confusion matrix
+confusionMatrix(as.factor(GLM1Tst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 1 test
+predTst_M1=prediction(GLM1Tst_predclass, lcdf2Tst$loan_status)
+rocTst_M1 <-performance(predTst_M1, "tpr", "fpr")
+plot(rocTst_M1) + abline(a=0, b= 1)
+
+#AUC for Model 1 test
+aucPrefTst_M1 <-performance(predTst_M1, "auc")
+aucPrefTst_M1@y.values
+
+```
+
+#MODEL 2 - RIDGE, with lambda.min
+
+```{r}
+
+M2cv.lasso <- cv.glmnet(x, y, alpha = 0, family = "binomial")
+GLMmodel2 <- glmnet(x, y, alpha = 0, family = "binomial",
+                lambda = M2cv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodel2)
+
+# Make predictions on the train data for Model 2
+GLM2.train <- model.matrix(loan_status ~., lcdf2Trn)[,-9]
+GLM2Trn_prob <- GLMmodel2 %>% predict(newx = GLM2.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLM2Trn_predclass <- ifelse(GLM2Trn_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM2Trn_obsclass <- lcdf2Trn$loan_status
+mean(GLM2Trn_predclass == GLM2Trn_obsclass)
+
+# Make predictions on the test data for Model 2
+GLM2.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLM2Tst_prob <- GLMmodel2 %>% predict(newx = GLM2.test)
+#1 stands for Charged Off
+GLM2Tst_predclass <- ifelse(GLM2Tst_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM2Tst_obsclass <- lcdf2Tst$loan_status
+mean(GLM2Tst_predclass == GLM2Tst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLM2Trn_predclass), as.factor(lcdf2Trn$loan_status))
+
+#ROC for Model 2 train
+pred_M2=prediction(GLM2Trn_predclass, lcdf2Trn$loan_status)
+roc_M2 <-performance(pred_M2, "tpr", "fpr")
+plot(roc_M2) + abline(a=0, b= 1)
+
+#AUC for Model 2 train
+aucPref_M2 <-performance(pred_M2, "auc")
+aucPref_M2@y.values
+
+#confusion matrix
+confusionMatrix(as.factor(GLM2Tst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 2 test
+predTst_M2=prediction(GLM2Tst_predclass, lcdf2Tst$loan_status)
+rocTst_M2 <-performance(predTst_M2, "tpr", "fpr")
+plot(rocTst_M2) + abline(a=0, b= 1)
+
+#AUC for Model 2 test
+aucPrefTst_M2 <-performance(predTst_M2, "auc")
+aucPrefTst_M2@y.values
+
+```
+
+#MODEL 3 - LASSO, with lambda.1se
+
+```{r}
+
+M3cv.lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")
+GLMmodel3 <- glmnet(x, y, alpha = 1, family = "binomial",lambda = M3cv.lasso$lambda.1se)
+
+# Display classification coefficients
+coef(GLMmodel3)
+
+# Make predictions on the train data for Model 3
+GLM3.train <- model.matrix(loan_status ~., lcdf2Trn)[,-9]
+GLM3Trn_prob <- GLMmodel3 %>% predict(newx = GLM3.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLM3Trn_predclass <- ifelse(GLM3Trn_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM3Trn_obsclass <- lcdf2Trn$loan_status
+mean(GLM3Trn_predclass == GLM3Trn_obsclass)
+
+# Make predictions on the test data for Model 2
+GLM3.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLM3Tst_prob <- GLMmodel3 %>% predict(newx = GLM3.test)
+#1 stands for Charged Off
+GLM3Tst_predclass <- ifelse(GLM3Tst_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM3Tst_obsclass <- lcdf2Tst$loan_status
+mean(GLM3Tst_predclass == GLM3Tst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLM3Trn_predclass), as.factor(lcdf2Trn$loan_status))
+
+#ROC for Model 3 train
+pred_M3=prediction(GLM3Trn_predclass, lcdf2Trn$loan_status)
+roc_M3 <-performance(pred_M3, "tpr", "fpr")
+plot(roc_M3) + abline(a=0, b= 1)
+
+#AUC for Model 3 train
+aucPref_M3 <-performance(pred_M3, "auc")
+aucPref_M3@y.values
+
+#confusion matrix
+confusionMatrix(as.factor(GLM3Tst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 3 test
+predTst_M3=prediction(GLM3Tst_predclass, lcdf2Tst$loan_status)
+rocTst_M3 <-performance(predTst_M3, "tpr", "fpr")
+plot(rocTst_M3) + abline(a=0, b= 1)
+
+#AUC for Model 3 test
+aucPrefTst_M3 <-performance(predTst_M3, "auc")
+aucPrefTst_M3@y.values
+
+```
+
+#MODEL 4 - RIDGE, with lambda.1se
+
+```{r}
+
+M4cv.lasso <- cv.glmnet(x, y, alpha = 0, family = "binomial")
+GLMmodel4 <- glmnet(x, y, alpha = 0, family = "binomial",
+                lambda = M4cv.lasso$lambda.1se)
+
+# Display classification coefficients
+coef(GLMmodel4)
+
+# Make predictions on the train data for Model 4
+GLM4.train <- model.matrix(loan_status ~., lcdf2Trn)[,-9]
+GLM4Trn_prob <- GLMmodel4 %>% predict(newx = GLM4.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLM4Trn_predclass <- ifelse(GLM4Trn_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM4Trn_obsclass <- lcdf2Trn$loan_status
+mean(GLM4Trn_predclass == GLM4Trn_obsclass)
+
+
+# Make predictions on the test data for Model 4
+GLM4.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLM4Tst_prob <- GLMmodel4 %>% predict(newx = GLM4.test)
+#1 stands for Charged Off
+GLM4Tst_predclass <- ifelse(GLM4Tst_prob > 0.5, 1, 0)
+
+# Model accuracy
+GLM4Tst_obsclass <- lcdf2Tst$loan_status
+mean(GLM4Tst_predclass == GLM4Tst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLM4Trn_predclass), as.factor(lcdf2Trn$loan_status))
+
+#ROC for Model 4 train
+pred_M4=prediction(GLM4Trn_predclass, lcdf2Trn$loan_status)
+roc_M4 <-performance(pred_M4, "tpr", "fpr")
+plot(roc_M4) + abline(a=0, b= 1)
+
+#AUC for Model 4 train
+aucPref_M4 <-performance(pred_M4, "auc")
+aucPref_M4@y.values
+
+#confusion matrix
+confusionMatrix(as.factor(GLM4Tst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 4 test
+predTst_M4=prediction(GLM4Tst_predclass, lcdf2Tst$loan_status)
+rocTst_M4 <-performance(predTst_M4, "tpr", "fpr")
+plot(rocTst_M4) + abline(a=0, b= 1)
+
+#AUC for Model 4 test
+aucPrefTst_M4 <-performance(predTst_M4, "auc")
+aucPrefTst_M4@y.values
+
+```
+
+
+#GLM Oversampling
+
+```{r}
+# Prepare model matrix for oversample data
+x_os <- model.matrix(loan_status~., os_lcdf2Trn)[,-9]
+# Loan status is numeric and stored in y
+y_os <- os_lcdf2Trn$loan_status
+```
+
+
+#GLM Best Model - Oversample model for GLM Lasso
+
+```{r}
+#Run glmnet model to get list of lambda values
+M1OScv.lasso <- cv.glmnet(x_os, y_os, alpha = 1, family = "binomial")
+
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelOS1 <- glmnet(x_os, y_os, alpha = 1, family = "binomial", lambda = M1OScv.lasso$lambda.min)
+
+#Model 11
+#Run glmnet model with cv.lasso$lambda.1se
+GLMmodelOS1 <- glmnet(x_os, y_os, alpha = 1, family = "binomial", lambda = M1OScv.lasso$lambda.1se)
+
+```
+
+
+```{r}
+
+# Make predictions on the oversampled train data for Model 1
+GLMOS1.train <- model.matrix(loan_status ~., os_lcdf2Trn)[,-9]
+GLMOS1Trn_prob <- GLMmodelOS1 %>% predict(newx = GLMOS1.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLMOS1Trn_predclass <- ifelse(GLMOS1Trn_prob > 0.5,1, 0)
+#Threshold = 0.3
+GLMOS1Trn_predclass <- ifelse(GLMOS1Trn_prob > 0.3,1, 0)
+#Threshold = 0.6
+GLMOS1Trn_predclass <- ifelse(GLMOS1Trn_prob > 0.6,1, 0)
+
+# Model accuracy
+GLMOS1Trn_obsclass <- os_lcdf2Trn$loan_status
+mean(GLMOS1Trn_predclass == GLMOS1Trn_obsclass)
+
+# Make predictions on the test data for Model 1
+GLMOS1.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMOS1Tst_prob <- GLMmodelOS1 %>% predict(newx = GLMOS1.test)
+#0 stands for Charged Off
+GLM1OSTst_predclass <- ifelse(GLMOS1Tst_prob > 0.5, 1, 0)
+#Threshold = 0.3
+GLM1OSTst_predclass <- ifelse(GLMOS1Tst_prob > 0.3, 1, 0)
+#Threshold = 0.6
+GLM1OSTst_predclass <- ifelse(GLMOS1Tst_prob > 0.6, 1, 0)
+
+# Model accuracy
+GLM1OSTst_obsclass <- lcdf2Tst$loan_status
+mean(GLM1OSTst_predclass == GLM1OSTst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMOS1Trn_predclass), as.factor(os_lcdf2Trn$loan_status))
+
+#ROC for OverSample Model 1 train
+pred_M1OS=prediction(GLMOS1Trn_predclass, os_lcdf2Trn$loan_status)
+roc_OSM1 <-performance(pred_M1OS, "tpr", "fpr")
+plot(roc_OSM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 train
+aucPref_OSM1 <-performance(pred_M1OS, "auc")
+aucPref_OSM1@y.values
+
+#confusion matrix
+confusionMatrix(as.factor(GLM1OSTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 1 test
+predOSTst_M1=prediction(GLM1OSTst_predclass, lcdf2Tst$loan_status)
+rocTst_OSM1 <-performance(predOSTst_M1, "tpr", "fpr")
+plot(rocTst_OSM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 test
+aucPrefTstOS_M1 <-performance(predOSTst_M1, "auc")
+aucPrefTstOS_M1@y.values
+```
+
+
+#Oversample model for GLM 
+
+```{r}
+#Run glmnet model to get list of lambda values
+M2OScv.lasso <- cv.glmnet(x_os, y_os, alpha = 0, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelOS2 <- glmnet(x_os, y_os, alpha = 0, family = "binomial", lambda = M2OScv.lasso$lambda.min)
+#Run glmnet model with cv.lasso$lambda.1se
+GLMmodelOS2 <- glmnet(x_os, y_os, alpha = 0, family = "binomial", lambda = M2OScv.lasso$lambda.1se)
+
+# Display classification coefficients
+coef(GLMmodelOS2)
+
+# Make predictions on the oversampled train data for Model 2
+GLMOS2.train <- model.matrix(loan_status ~., os_lcdf2Trn)[,-9]
+GLMOS2Trn_prob <- GLMmodelOS2 %>% predict(newx = GLMOS2.train)
+#predict for trainset Model, 0 stands for Charged Off
+GLMOS2Trn_predclass <- ifelse(GLMOS2Trn_prob > 0.5, 1,0)
+#Threshold = 0.3
+GLMOS2Trn_predclass <- ifelse(GLMOS2Trn_prob > 0.3, 1,0)
+#Threshold = 0.6
+GLMOS2Trn_predclass <- ifelse(GLMOS2Trn_prob > 0.6, 1,0)
+
+# Model accuracy
+GLMOS2Trn_obsclass <- os_lcdf2Trn$loan_status
+mean(GLMOS2Trn_predclass == GLMOS2Trn_obsclass)
+
+# Make predictions on the test data for Model 2
+GLMOS2.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMOS2Tst_prob <- GLMmodelOS1 %>% predict(newx = GLMOS2.test)
+#0 stands for Charged Off
+GLM2OSTst_predclass <- ifelse(GLMOS2Tst_prob > 0.5, 1, 0)
+#Threshold = 0.3
+GLM2OSTst_predclass <- ifelse(GLMOS2Tst_prob > 0.3, 1, 0)
+#Threshold = 0.6
+GLM2OSTst_predclass <- ifelse(GLMOS2Tst_prob > 0.6, 1, 0)
+
+# Model accuracy
+GLM2OSTst_obsclass <- lcdf2Tst$loan_status
+mean(GLM2OSTst_predclass == GLM2OSTst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMOS2Trn_predclass), as.factor(os_lcdf2Trn$loan_status))
+
+#ROC for OverSampled Model 2 train
+pred_M2OS=prediction(GLMOS2Trn_predclass, os_lcdf2Trn$loan_status)
+roc_OSM2 <-performance(pred_M2OS, "tpr", "fpr")
+plot(roc_OSM2) + abline(a=0, b= 1)
+
+#AUC for OverSampled Model 2 train
+aucPref_OSM2 <-performance(pred_M2OS, "auc")
+aucPref_OSM2@y.values
+
+#confusion matrix
+confusionMatrix(as.factor(GLM2OSTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for OverSampled Model 2 test
+predOSTst_M2=prediction(GLM2OSTst_predclass, lcdf2Tst$loan_status)
+rocTst_OSM2 <-performance(predOSTst_M2, "tpr", "fpr")
+plot(rocTst_OSM2) + abline(a=0, b= 1)
+
+#AUC for OverSampled Model 2 test
+aucPrefTstOS_M2 <-performance(predOSTst_M2, "auc")
+aucPrefTstOS_M2@y.values
+
+```
+
+
+#BOTH OVER AND UNDER SAMPLE GLM - LOAN STATUS - Lasso
+
+```{r}
+# Prepare model matrix for both over and under sample data
+x_bs <- model.matrix(loan_status~., bs_lcdf2Trn)[,-9]
+# Loan status is numeric and stored in y
+y_bs <- bs_lcdf2Trn$loan_status
+
+#Both (over and under sample) model for GLM Lasso
+#Run glmnet model to get list of lambda values
+M1BScv.lasso <- cv.glmnet(x_bs, y_bs, alpha = 1, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelbs1 <- glmnet(x_bs, y_bs, alpha = 1, family = "binomial", lambda = M1BScv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodelbs1)
+
+# Make predictions on the oversampled train data for Model 1
+GLMbs1.train <- model.matrix(loan_status ~., bs_lcdf2Trn)[,-9]
+GLMbs1Trn_prob <- GLMmodelbs1 %>% predict(newx = GLMbs1.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLMbs1Trn_predclass <- ifelse(GLMbs1Trn_prob > 0.5,1, 0)
+GLMbs1Trn_predclass <- ifelse(GLMbs1Trn_prob > 0.3,1, 0)
+GLMbs1Trn_predclass <- ifelse(GLMbs1Trn_prob > 0.7,1, 0)
+
+# Model accuracy
+GLMbs1Trn_obsclass <- bs_lcdf2Trn$loan_status
+mean(GLMbs1Trn_predclass == GLMbs1Trn_obsclass)
+
+# Make predictions on the test data for Model 1
+GLMbs1.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMbs1Tst_prob <- GLMmodelbs1 %>% predict(newx = GLMbs1.test)
+#0 stands for Charged Off
+GLM1bsTst_predclass <- ifelse(GLMbs1Tst_prob > 0.5, 1, 0)
+GLM1bsTst_predclass <- ifelse(GLMbs1Tst_prob > 0.3, 1, 0)
+GLM1bsTst_predclass <- ifelse(GLMbs1Tst_prob > 0.7, 1, 0)
+
+# Model accuracy
+GLM1bsTst_obsclass <- lcdf2Tst$loan_status
+mean(GLM1bsTst_predclass == GLM1bsTst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMbs1Trn_predclass), as.factor(bs_lcdf2Trn$loan_status))
+
+#ROC for OverSample Model 1 train
+pred_M1bs=prediction(GLMbs1Trn_predclass, bs_lcdf2Trn$loan_status)
+roc_bsM1 <-performance(pred_M1bs, "tpr", "fpr")
+plot(roc_bsM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 train
+aucPref_bsM1 <-performance(pred_M1bs, "auc")
+aucPref_bsM1@y.values
+
+#confusion matrix for test
+confusionMatrix(as.factor(GLM1bsTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 1 test
+predbsTst_M1=prediction(GLM1bsTst_predclass, lcdf2Tst$loan_status)
+rocTst_bsM1 <-performance(predbsTst_M1, "tpr", "fpr")
+plot(rocTst_bsM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 test
+aucPrefTstbs_M1 <-performance(predbsTst_M1, "auc")
+aucPrefTstbs_M1@y.values
+
+```
+
+# GLM Sampling - Both, Ridge
+
+```{r}
+#Run glmnet model to get list of lambda values
+M2BScv.lasso <- cv.glmnet(x_bs, y_bs, alpha = 0, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelbs2 <- glmnet(x_bs, y_bs, alpha = 0, family = "binomial", lambda = M2BScv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodelbs2)
+
+# Make predictions on the both sampled train data for Model 2
+GLMbs2.train <- model.matrix(loan_status ~., bs_lcdf2Trn)[,-9]
+GLMbs2Trn_prob <- GLMmodelbs2 %>% predict(newx = GLMbs2.train)
+#predict for trainset Model, 0 stands for Charged Off
+GLMbs2Trn_predclass <- ifelse(GLMbs2Trn_prob > 0.5,1, 0)
+GLMbs2Trn_predclass <- ifelse(GLMbs2Trn_prob > 0.3,1, 0)
+GLMbs2Trn_predclass <- ifelse(GLMbs2Trn_prob > 0.7,1, 0)
+
+# Model accuracy
+GLMbs2Trn_obsclass <- bs_lcdf2Trn$loan_status
+mean(GLMbs2Trn_predclass == GLMbs2Trn_obsclass)
+
+# Make predictions on the test data for Model 1
+GLMbs2.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMbs2Tst_prob <- GLMmodelbs2 %>% predict(newx = GLMbs2.test)
+#0 stands for Charged Off
+GLM2bsTst_predclass <- ifelse(GLMbs2Tst_prob > 0.5, 1, 0)
+GLM2bsTst_predclass <- ifelse(GLMbs2Tst_prob > 0.3, 1, 0)
+GLM2bsTst_predclass <- ifelse(GLMbs2Tst_prob > 0.7, 1, 0)
+
+# Model accuracy
+GLM2bsTst_obsclass <- lcdf2Tst$loan_status
+mean(GLM2bsTst_predclass == GLM2bsTst_obsclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMbs2Trn_predclass), as.factor(bs_lcdf2Trn$loan_status))
+
+#ROC for OverSample Model 1 train
+pred_M2bs=prediction(GLMbs2Trn_predclass, bs_lcdf2Trn$loan_status)
+roc_bsM2 <-performance(pred_M2bs, "tpr", "fpr")
+plot(roc_bsM2) + abline(a=0, b= 1)
+
+#AUC for Model 2 train
+aucPref_bsM2 <-performance(pred_M2bs, "auc")
+aucPref_bsM2@y.values
+
+#confusion matrix for test
+confusionMatrix(as.factor(GLM2bsTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 2 test
+predbsTst_M2=prediction(GLM2bsTst_predclass, lcdf2Tst$loan_status)
+rocTst_bsM2 <-performance(predbsTst_M2, "tpr", "fpr")
+plot(rocTst_bsM2) + abline(a=0, b= 1)
+
+#AUC for Model 2 test
+aucPrefTstbs_M2 <-performance(predbsTst_M2, "auc")
+aucPrefTstbs_M2@y.values
+```
+
+
+#UNDER SAMPLE GLM - LOAN STATUS
+
+```{r}
+# Prepare model matrix for under sample data
+x_us <- model.matrix(loan_status~., us_lcdf2Trn)[,-9]
+# Loan status is numeric and stored in y
+y_us <- us_lcdf2Trn$loan_status
+
+#under sample model for GLM Lasso
+#Run glmnet model to get list of lambda values
+M1uscv.lasso <- cv.glmnet(x_us, y_us, alpha = 1, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelus1 <- glmnet(x_us, y_us, alpha = 1, family = "binomial", lambda = M1uscv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodelus1)
+
+# Make predictions on the oversampled train data for Model 1
+GLMus1.train <- model.matrix(loan_status ~., us_lcdf2Trn)[,-9]
+GLMus1Trn_prob <- GLMmodelus1 %>% predict(newx = GLMus1.train)
+#predict for trainset Model, 1 stands for Charged Off
+GLMus1Trn_predclass <- ifelse(GLMus1Trn_prob > 0.5,1, 0)
+GLMus1Trn_predclass <- ifelse(GLMus1Trn_prob > 0.3,1, 0)
+GLMus1Trn_predclass <- ifelse(GLMus1Trn_prob > 0.7,1, 0)
+
+# Model accuracy
+GLMus1Trn_ousclass <- us_lcdf2Trn$loan_status
+mean(GLMus1Trn_predclass == GLMus1Trn_ousclass)
+
+# Make predictions on the test data for Model 1
+GLMus1.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMus1Tst_prob <- GLMmodelus1 %>% predict(newx = GLMus1.test)
+#0 stands for Charged Off
+GLM1usTst_predclass <- ifelse(GLMus1Tst_prob > 0.5, 1, 0)
+GLM1usTst_predclass <- ifelse(GLMus1Tst_prob > 0.3, 1, 0)
+GLM1usTst_predclass <- ifelse(GLMus1Tst_prob > 0.7, 1, 0)
+
+# Model accuracy
+GLM1usTst_ousclass <- lcdf2Tst$loan_status
+mean(GLM1usTst_predclass == GLM1usTst_ousclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMus1Trn_predclass), as.factor(us_lcdf2Trn$loan_status))
+
+#ROC for OverSample Model 1 train
+pred_M1us=prediction(GLMus1Trn_predclass, us_lcdf2Trn$loan_status)
+roc_usM1 <-performance(pred_M1us, "tpr", "fpr")
+plot(roc_usM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 train
+aucPref_usM1 <-performance(pred_M1us, "auc")
+aucPref_usM1@y.values
+
+#confusion matrix for test
+confusionMatrix(as.factor(GLM1usTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 1 test
+predusTst_M1=prediction(GLM1usTst_predclass, lcdf2Tst$loan_status)
+rocTst_usM1 <-performance(predusTst_M1, "tpr", "fpr")
+plot(rocTst_usM1) + abline(a=0, b= 1)
+
+#AUC for Model 1 test
+aucPrefTstus_M1 <-performance(predusTst_M1, "auc")
+aucPrefTstus_M1@y.values
+
+```
+
+
+# Sampling GLM - Both, Ridge
+
+```{R}
+#Run glmnet model to get list of lambda values
+M2uscv.lasso <- cv.glmnet(x_us, y_us, alpha = 0, family = "binomial")
+#Run glmnet model with cv.lasso$lambda.min
+GLMmodelus2 <- glmnet(x_us, y_us, alpha = 0, family = "binomial", lambda = M2uscv.lasso$lambda.min)
+
+# Display classification coefficients
+coef(GLMmodelus2)
+
+# Make predictions on the both sampled train data for Model 2
+GLMus2.train <- model.matrix(loan_status ~., us_lcdf2Trn)[,-9]
+GLMus2Trn_prob <- GLMmodelus2 %>% predict(newx = GLMus2.train)
+#predict for trainset Model, 0 stands for Charged Off
+GLMus2Trn_predclass <- ifelse(GLMus2Trn_prob > 0.5,1, 0)
+GLMus2Trn_predclass <- ifelse(GLMus2Trn_prob > 0.3,1, 0)
+GLMus2Trn_predclass <- ifelse(GLMus2Trn_prob > 0.7,1, 0)
+
+# Model accuracy
+GLMus2Trn_ousclass <- us_lcdf2Trn$loan_status
+mean(GLMus2Trn_predclass == GLMus2Trn_ousclass)
+
+# Make predictions on the test data for Model 1
+GLMus2.test <- model.matrix(loan_status ~., lcdf2Tst)[,-9]
+GLMus2Tst_prob <- GLMmodelus2 %>% predict(newx = GLMus2.test)
+#0 stands for Charged Off
+GLM2usTst_predclass <- ifelse(GLMus2Tst_prob > 0.5, 1, 0)
+GLM2usTst_predclass <- ifelse(GLMus2Tst_prob > 0.3, 1, 0)
+GLM2usTst_predclass <- ifelse(GLMus2Tst_prob > 0.7, 1, 0)
+
+# Model accuracy
+GLM2usTst_ousclass <- lcdf2Tst$loan_status
+mean(GLM2usTst_predclass == GLM2usTst_ousclass)
+
+#confusion matrix for training
+confusionMatrix(as.factor(GLMus2Trn_predclass), as.factor(us_lcdf2Trn$loan_status))
+
+#ROC for OverSample Model 1 train
+pred_M2us=prediction(GLMus2Trn_predclass, us_lcdf2Trn$loan_status)
+roc_usM2 <-performance(pred_M2us, "tpr", "fpr")
+plot(roc_usM2) + abline(a=0, b= 1)
+
+#AUC for Model 2 train
+aucPref_usM2 <-performance(pred_M2us, "auc")
+aucPref_usM2@y.values
+
+#confusion matrix for test
+confusionMatrix(as.factor(GLM2usTst_predclass), as.factor(lcdf2Tst$loan_status))
+
+#ROC for Model 2 test
+predusTst_M2=prediction(GLM2usTst_predclass, lcdf2Tst$loan_status)
+rocTst_usM2 <-performance(predusTst_M2, "tpr", "fpr")
+plot(rocTst_usM2) + abline(a=0, b= 1)
+
+#AUC for Model 2 test
+aucPrefTstus_M2 <-performance(predusTst_M2, "auc")
+aucPrefTstus_M2@y.values
+
+```
+
+#1(c)
+#ROC curves for the Best GBM, GLM and the random forest model in the same plot 
+
+```{r}
+
+#develop a model with 100 trees, and obtain variable importance
+rfModel5 = randomForest(loan_status ~ .,data=os_, ntree=100, importance=TRUE )
+rfModel5
+
+perfROC_GLMTst=performance(prediction(predict(GLMmodelOS1,lcdf2Tst, type="prob")[,"Charged Off"], lcdf2Tst$loan_status, label.ordering = c("Fully Paid", "Charged Off")), "tpr", "fpr")
+
+perfROC_rfTst=performance(prediction(predict(rfModel5,
+lcdf2Tst, type="prob")[,"Charged Off"], lcdf2Tst$loan_status,label.ordering = c("Fully Paid", "Charged Off")),"tpr", "fpr")
+
+perfROC_GBMTst=performance(prediction(predict(lcdf2_gbm4,lcdf2Tst, type="prob")[,"Charged Off"], lcdf2Tst$loan_status,label.ordering = c("Fully Paid", "Charged Off")),"tpr", "fpr")
+
+plot(perfROC_GBMTst, col=`red`, add=TRUE)
+plot(perfROC_GLMTst, col='green', add=TRUE)
+plot(perfROC_rfTst, col='blue', add=TRUE)
+legend('bottomright', c('GBM', 'RandomForest','GLM'), lty=1, col=c('red','blue','green'))
+abline(a = 0, b = 1)
+
+```
+
+
+# 1d
+# 1(d) Examine which variables are found to be important by the best models from the different methods, and comment on similarities, difference. What do you conclude?
+# variable selection for gbm model 4
+```{r}
+#GBM
+
+par(mar=c(3,14,1,1))
+summary(lcdf2_gbm4, las=2)
+
+#GLM
+# Display classification coefficients
+coef(GLMmodelOS1)
+coefs = coef(GLMmodelOS1)[,1]
+coefs = sort(abs(coefs), decreasing = T)
+coefs
+
+```
+
+
+
+#Q2 Develop models to identify loans which provide the best returns. Explain how you define returns? Does it include Lending Club's service costs? Develop glm, rf, gbm models for this. Show how you systematically experiment with different parameters to find the best models. Compare model performance. Do you find larger training sets to give better models? 
+
+```{R}
+#splitting the data into training and testing dataset
+set.seed(1234)
+lcdfSplit<-initial_split(lcdf1, prop=0.7)
+lcdfTrn<-training(lcdfSplit)
+lcdfTst<-testing(lcdfSplit)
+
+#under sampling
+us_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="under", p=0.5)$data
+us_lcdfTrn %>% group_by(loan_status) %>% count()
+
+#over sampling
+os_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="over", p=0.5)$data
+os_lcdfTrn %>% group_by(loan_status) %>% count()
+
+#Both (Under and Over sampling)
+bs_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="both", p=0.5)$data
+bs_lcdfTrn %>% group_by(loan_status) %>% count()
+```
+
+
+#developing Random Forest Model for Actual Returns
+
+library(ranger)
+
+#Model #1 - 100 trees
+
+```{r}
+
+rfModel_Ret<-ranger(Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), num.trees=100, importance='permutation')
+
+#Prediction for Model #1
+rfPredRet_trn<-predict(rfModel_Ret, lcdfTrn)
+sqrt(mean((rfPredRet_trn$predictions- lcdfTrn$Actual_annual_return)^2))
+
+rfPredRet_tst<-predict(rfModel_Ret, lcdfTst)
+sqrt(mean((rfPredRet_tst$predictions- lcdfTst$Actual_annual_return)^2))
+
+```
+
+#Model #2 - 200 trees
+
+```{r}
+rfModel_Ret<-ranger(Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), num.trees=200, importance='permutation')
+
+#Prediction for Model #2
+rfPredRet_trn<-predict(rfModel_Ret, lcdfTrn)
+sqrt(mean((rfPredRet_trn$predictions- lcdfTrn$Actual_annual_return)^2))
+
+rfPredRet_tst<-predict(rfModel_Ret, lcdfTst)
+sqrt(mean((rfPredRet_tst$predictions- lcdfTst$Actual_annual_return)^2))
+
+```
+
+#Model #3 - 500 trees
+
+```{r}
+rfModel_Ret<-ranger(Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), num.trees=500, importance='permutation')
+
+#Prediction for Model #3
+rfPredRet_trn<-predict(rfModel_Ret, lcdfTrn)
+sqrt(mean((rfPredRet_trn$predictions- lcdfTrn$Actual_annual_return)^2))
+
+rfPredRet_tst<-predict(rfModel_Ret, lcdfTst)
+sqrt(mean((rfPredRet_tst$predictions- lcdfTst$Actual_annual_return)^2))
+
+```
+
+#Model #4 - 1000 trees
+
+```{r}
+
+rfModel_Ret<-ranger(Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), num.trees=1000, importance='permutation')
+
+#Prediction for Model #4
+rfPredRet_trn<-predict(rfModel_Ret, lcdfTrn)
+sqrt(mean((rfPredRet_trn$predictions- lcdfTrn$Actual_annual_return)^2))
+
+rfPredRet_tst<-predict(rfModel_Ret, lcdfTst)
+sqrt(mean((rfPredRet_tst$predictions- lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GLM for actual returns:
+
+```{r}
+
+#GLM  Ridge Models
+library(glmnet)
+
+#GLM Ridge Model (No Sampling)
+
+xD<-lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)
+glmRet_cv<-cv.glmnet(data.matrix(xD), lcdfTrn$Actual_annual_return, type.measure="mse", alpha=0, family="gaussian")
+
+```
+
+
+#Predicting Model 1 with Train (lambdamin)
+
+```{r}
+
+predRetTrn= predict(glmRet_cv, data.matrix(lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s="lambda.min" )
+sqrt(mean((lcdfTrn$Actual_annual_return- predRetTrn)^2))
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTrn)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-predRetTrn, 10))
+
+a <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTrn=mean(predRetTrn), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(a, "Table 1.csv")
+
+```
+
+#Predicting Model 1 with Test (lambdamin)
+
+```{r}
+
+predRetTst= predict(glmRet_cv, data.matrix(lcdfTst%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s="lambda.min" )
+sqrt(mean((lcdfTst$Actual_annual_return- predRetTst)^2))
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-predRetTst, 10))
+
+b <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTst=mean(predRetTst), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(b, "Table 2.csv")
+
+```
+
+#Predicting Model 1 with Train (lambda1se)
+
+```{r}
+
+predRetTrn= predict(glmRet_cv, data.matrix(lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s=glmRet_cv$lambda.1se)
+sqrt(mean((lcdfTrn$Actual_annual_return- predRetTrn)^2))
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTrn)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-predRetTrn, 10))
+
+c <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTrn=mean(predRetTrn), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(c, "Table 3.csv")
+
+```
+
+#Predicting Model 1 with Test (lambda1se)
+
+```{r}
+predRetTst= predict(glmRet_cv, data.matrix(lcdfTst%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s=glmRet_cv$lambda.1se)
+sqrt(mean((lcdfTst$Actual_annual_return- predRetTst)^2))
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-predRetTst, 10))
+
+d <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTst=mean(predRetTst), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(d, "Table 4.csv")
+
+```
+
+
+#GLM Lasso Models
+
+#GLM Lasso Model (No Sampling)
+
+xD<-lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)
+glmRet_cv<-cv.glmnet(data.matrix(xD), lcdfTrn$Actual_annual_return, type.measure="mse", alpha=1, family="gaussian")
+
+#Predicting Model 1 with Train (lambdamin)
+```{r}
+predRetTrn= predict(glmRet_cv, data.matrix(lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s="lambda.min" )
+sqrt(mean((lcdfTrn$Actual_annual_return- predRetTrn)^2))
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTrn)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-predRetTrn, 10))
+
+a <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTrn=mean(predRetTrn), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(a, "Table 1.csv")
+
+```
+
+
+#Predicting Model 1 with Test (lambdamin)
+```{r}
+predRetTst= predict(glmRet_cv, data.matrix(lcdfTst%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s="lambda.min" )
+sqrt(mean((lcdfTst$Actual_annual_return- predRetTst)^2))
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-predRetTst, 10))
+
+b <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTst=mean(predRetTst), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(b, "Table 2.csv")
+
+```
+
+#Predicting Model 1 with Train (lambda1se)
+```{r}
+predRetTrn= predict(glmRet_cv, data.matrix(lcdfTrn%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s=glmRet_cv$lambda.1se)
+sqrt(mean((lcdfTrn$Actual_annual_return- predRetTrn)^2))
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTrn)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-predRetTrn, 10))
+
+c <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTrn=mean(predRetTrn), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(c, "Table 3.csv")
+
+```
+
+#Predicting Model 1 with Test (lambda1se)
+
+```{r}
+predRetTst= predict(glmRet_cv, data.matrix(lcdfTst%>% select(-loan_status, -actualTerm, -Annual_return, -Actual_annual_return)), s=glmRet_cv$lambda.1se)
+sqrt(mean((lcdfTst$Actual_annual_return- predRetTst)^2))
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRetTst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-predRetTst, 10))
+
+d <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRetTst=mean(predRetTst), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(d, "Table 4.csv")
+
+```
+
+
+
+#GBM Models
+
+```{r}
+install.packages("gbm")
+library(gbm)
+library(caret)
+```
+
+#GBM Model 1 with no sampling
+
+```{r}
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 500, interaction.depth= 2, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 1 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GBM Model 2 with no sampling
+
+```{r}
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 1000, interaction.depth= 2, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 2 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GBM Model 3 with no sampling
+
+```{r}
+
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 2000, interaction.depth= 2, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 3 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GBM Model 4 with no sampling
+
+```{r}
+
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 500, interaction.depth= 6, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 4 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GBM Model 5 with no sampling
+
+```{r}
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 1000, interaction.depth= 6, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 5 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#GBM Model 6 with no sampling
+
+```{r}
+
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), distribution = 'gaussian', n.trees= 2000, interaction.depth= 6, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 6 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+```
+
+#Taking 50:50 split and checking the RMSE error to see if larger training set have better models
+#50:50 part of GBM Best Model Annual Return
+
+```{r}
+
+#Best Model with 50:50 splitting
+lcdfSplit<-initial_split(lcdf1, prop=0.7)
+lcdfTrn0.5 <-training(lcdfSplit)
+lcdfTst0.5 <-testing(lcdfSplit)
+
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., data=subset(lcdfTrn0.5, select=-c(Annual_return, actualTerm, loan_status)), 
+distribution = 'gaussian', n.trees= 1000, interaction.depth= 2, shrinkage = 0.1, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 2 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn0.5, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn0.5$Actual_annual_return)^2))
+
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst0.5, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst0.5$Actual_annual_return)^2))
+
+#GBM Model 2 Plot for training and testing data
+
+plot((predict(gbmModel_Ret, lcdfTrn0.5)), lcdfTrn0.5$Actual_annual_return)
+plot((predict(gbmModel_Ret, lcdfTst0.5)), lcdfTst0.5$Actual_annual_return)
+
+```
+
+
+# Q3. Considering results from Questions 1 and 2 above, how would you select loans for investment? Describe your approach and show performance?
+#Best model is selected as GBM Model 2
+
+#RF Model 4 best among RF
+
+#Decile for Training Data of Model 4
+
+```{r}
+
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRet=(predict(rfModel_Ret, lcdfTrn))$predictions)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-predRet, 10))
+
+a <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRet=mean(predRet), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(a, "Table 1.csv")
+
+```
+
+
+#Decile for Testing Data of Model 4
+
+```{r}
+
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(predRet=(predict(rfModel_Ret, lcdfTst))$predictions)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-predRet, 10))
+
+b <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRet=mean(predRet), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(b, "Table 2.csv")
+
+```
+
+#Plot for Training and Testing Data
+
+```{r}
+
+val <- (predict(rfModel_Ret, lcdfTrn))$predictions + lcdfTrn$Actual_annual_return
+valcol <- (val + abs(min(val)))/max(val + abs(min(val)))
+plot ((predict(rfModel_Ret, lcdfTrn))$predictions, lcdfTrn$Actual_annual_return, xlab = "Pred Act Annual Ret", ylab = "Obs Act Annual Ret", col=rgb(0, 0, valcol))
+
+#Plot for Testing Data
+val1 <- (predict(rfModel_Ret, lcdfTst))$predictions + lcdfTst$Actual_annual_return
+valcol1 <- (val + abs(min(val)))/max(val + abs(min(val)))
+plot ((predict(rfModel_Ret, lcdfTst))$predictions, lcdfTst$Actual_annual_return, xlab = "Pred Act Annual Ret", ylab = "Obs Act Annual Ret", col=rgb(0, 0, valcol))
+
+```
+
+
+#GBM Model 2 deciles for training data
+
+```{r}
+
+predRet_Trn<-lcdfTrn%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(gbPredRet_trn)
+predRet_Trn<-predRet_Trn%>% mutate(tile=ntile(-gbPredRet_trn, 10))
+
+a <- predRet_Trn%>% group_by(tile) %>%  summarise(count=n(), avgpredRet=mean(gbPredRet_trn), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(a, "Training Decile.csv")
+
+```
+
+#GBM Model 2 deciles for testing data
+
+```{r}
+
+predRet_Tst<-lcdfTst%>% select(grade, loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(gbPredRet_tst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-gbPredRet_tst, 10))
+
+a <- predRet_Tst%>% group_by(tile) %>%  summarise(count=n(), avgpredRet=mean(gbPredRet_tst), numDefaults=sum(loan_status=="Charged Off"), avgActRet=mean(Actual_annual_return), minRet=min(Actual_annual_return), maxRet=max(Actual_annual_return), avgTer=mean(actualTerm), totA=sum(grade=="A"), totB=sum(grade=="B" ), totC=sum(grade=="C"), totD=sum(grade=="D"), totE=sum(grade=="E"), totF=sum(grade=="F") )
+write.csv(a, "Testing Decile.csv")
+
+```
+
+#GBM Model 2 Plot for training and testing data
+
+```{r}
+plot((predict(gbmModel_Ret, lcdfTrn)), lcdfTrn$Actual_annual_return)
+
+plot((predict(gbmModel_Ret, lcdfTst)), lcdfTst$Actual_annual_return)
+
+```
+
+
+#4. As seen in data summaries and your work in the first assignment, higher grade loans are less likely to default, but also carry lower interest rates; many lower grad loans are fully paid, and these can yield higher returns. One approach may be to focus on lower grade loans (C and below) and try to identify those which are likely to be paid off. Develop models from the data on lower grade loans, and check if this can provide an effective investment approach. Compare performance of models from different methods (glm, gbm, rf). Can this provide a useful approach for investment? Compare performance with that in Question 3.
+
+#Answer 4 begins here
+
+```{r}
+
+lcdf <- lcdf(subset, grade=="C" | grade=="D" | grade=="E" | grade=="F" | grade=="G")
+#splitting the data into training and testing dataset
+
+set.seed(1234)
+lcdfSplit<-initial_split(lcdf, prop=0.7)
+lcdfTrn<-training(lcdfSplit)
+lcdfTst<-testing(lcdfSplit)
+
+#under sampling
+us_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="under", p=0.5)$data
+us_lcdfTrn %>% group_by(loan_status) %>% count()
+#over sampling
+os_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="over", p=0.5)$data
+os_lcdfTrn %>% group_by(loan_status) %>% count()
+#Both (Under and Over sampling)
+bs_lcdfTrn<-ovun.sample(loan_status~., data = as.data.frame(lcdfTrn), na.action= na.pass, method="both", p=0.5)$data
+bs_lcdfTrn %>% group_by(loan_status) %>% count()
+
+```
+
+#Visualizing the data after removing A and B grades
+```{r}
+
+lcdf_grade <- subset(lcdf1, grade=="C" | grade=="D" | grade=="E" | grade=="F" | grade=="G")
+table(lcdf_grade$grade,lcdf_grade$loan_status)
+#Bar Graph
+ggplot(lcdf_grade, aes(x = grade)) + geom_bar(width = 0.5) + xlab("Grade") + ylab("Total Count")
+
+```
+
+#All the models from Answer 2 are run for Answer 4 using new dataset created above. And best model is selected which is GBM model 6 and analyzing it.
+
+#Q4, decile and open up the top 3 deciles and analyze
+```{r}
+
+lcdfGrade1 <- subset(lcdf1, grade=="C" | grade=="D" | grade=="E" | grade=="F" | grade=="G")
+lcdfSplit<-initial_split(lcdfGrade1, prop=0.7)
+lcdfTrn <-training(lcdfSplit)
+lcdfTst <-testing(lcdfSplit)
+```
+
+#GBM Model 6 with no sampling
+```{r}
+
+gbmModel_Ret<-gbm(formula=Actual_annual_return~., 
+data=subset(lcdfTrn, select=-c(Annual_return, actualTerm, loan_status)), 
+distribution = 'gaussian', n.trees= 2000, interaction.depth= 2, shrinkage = 0.01, bag.fraction= 0.5, cv.folds= 5, n.cores=NULL )
+
+#GBM Model 6 prediction
+gbPredRet_trn <- predict(gbmModel_Ret, lcdfTrn, type = "response")
+sqrt(mean((gbPredRet_trn-lcdfTrn$Actual_annual_return)^2))
+gbPredRet_tst <- predict(gbmModel_Ret, lcdfTst, type = "response")
+sqrt(mean((gbPredRet_tst-lcdfTst$Actual_annual_return)^2))
+
+predRet_Tst<-lcdfTst%>% select(grade,sub_grade,loan_status, Actual_annual_return, actualTerm, int_rate) %>% mutate(gbPredRet_tst)
+predRet_Tst<-predRet_Tst%>% mutate(tile=ntile(-gbPredRet_tst, 10))
+b <- predRet_Tst%>% group_by(tile)
+write.csv(b,file = "C:/Users/nikit/Desktop/IDS_572/Assignment2/decileQ4.csv")
+```
+
+
+# END of Assignment 2
+

@@ -1,0 +1,279 @@
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(ROCR)
+library(rpart)
+library(C50)
+library(randomForest)
+lcData4m <- read.csv("C:/Users/archa/OneDrive/Desktop/lcData4m.csv")
+View(lcData4m)
+#proportion of defaults (âcharged offâ vs âfully paidâ loans)
+#Pie Chart
+table(lcData4m$loan_status)
+freq <- c(13652, 78972)
+lbls <-c("Charged Off", "Fully Paid")
+pct <- round(freq/sum(freq)*100)
+lbls <- paste(lbls, pct)
+lbls <- paste(lbls,"%",sep="")
+pie(freq,labels = lbls, col=rainbow(length(lbls)), main="Pie Chart of Loan Status")
+#Bar Graph
+ggplot(lcData4m, aes(x = loan_status)) + geom_bar(width = 0.5) + xlab("Loan Status") + ylab("Total Count")
+#Variation of default rate with loan grade
+graph <- lcData4m %>% group_by(grade) %>% summarise(Count = n(), DefaultRate = (sum(loan_status == "Charged Off")/Count)*100)
+graph
+ggplot(graph) + aes(x = graph$grade, y = graph$DefaultRate, fill = graph$grade) + geom_bar(stat = "identity") + xlab("Grade") + ylab("Default Rate")
+#Variation of default rate with loan sub grade
+graphs <- lcData4m %>% group_by(sub_grade) %>% summarise(Count = n(), DefaultRate = (sum(loan_status == "Charged Off")/Count)*100)
+graphs
+ggplot(graphs) + aes(x = graphs$sub_grade, y = graphs$DefaultRate, fill = graphs$sub_grade) + geom_bar(stat = "identity") + xlab("Sub Grade") + ylab("Default Rate")
+#Number of loans in each grade
+#Pie Chart
+table(lcData4m$grade)
+freq <- c(22591, 29523, 25596, 11071, 3309, 463, 71)
+lbls <- c("A", "B", "C", "D", "E", "F", "G")
+pct <- round(freq/sum(freq)*100)
+lbls <- paste(lbls, pct)
+lbls <- paste(lbls,"%",sep="")
+lbls
+pie(freq,labels = lbls, col=rainbow(length(lbls)), main="Pie Chart of loans in each grade")
+#Bar Graph
+ggplot(lcData4m, aes(x = grade)) + geom_bar(width = 0.5) + xlab("Grade") + ylab("Total Count")
+#Variation of loan amount by grade
+lcData4m %>% group_by(grade) %>% summarise(mean(loan_amnt))
+ggplot(lcData4m, aes(x = grade, y = loan_amnt, fill = grade)) + geom_boxplot(width = 0.5) + xlab("Grade") + ylab("Loan Amount")
+#Variation of int rate with grade
+lcData4m$int_rate <- as.character(lcData4m$int_rate)
+lcData4m$int_rate <- as.numeric(substr(lcData4m$int_rate, 1, nchar(lcData4m$int_rate)-1))
+lcData4m %>% group_by(grade) %>% summarise(mean(int_rate))
+ggplot(lcData4m, aes(x = grade, y = int_rate, fill = grade)) + geom_boxplot(width = 0.5) + xlab("Grade") + ylab("Interest Rate")
+#Variation of int rate with sub grade
+graph1 <- lcData4m %>% group_by(sub_grade) %>% summarize(mean(int_rate))
+graph1
+ggplot(graph1) + aes(x= graph1$sub_grade, y= graph1$`mean(int_rate)`, fill = graph1$sub_grade, color = graph1$sub_grade) + geom_bar(stat = "identity") + xlab("Sub Grade") + ylab("Interest Rate") + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#Purpose of people borrowing money
+table(lcData4m$purpose)
+ggplot(lcData4m, aes(x = purpose, fill = purpose)) + geom_bar(width = 0.5) + xlab("Purpose") + ylab("Loan Count") + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#Loans by purpose
+table(lcData4m$purpose, lcData4m$loan_status)
+ggplot(lcData4m, aes(x = purpose, fill = purpose)) + geom_bar(width = 0.5) + facet_wrap(~loan_status) + xlab("Purpose") + ylab("Loan Count") + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#Avg amounts by purpose
+graph1 <- lcData4m %>% group_by(purpose) %>% summarize(mean(loan_amnt))
+graph1
+ggplot(graph1) + aes(x = graph1$purpose, y = graph1$`mean(loan_amnt)`, fill = graph1$purpose, color = graph1$purpose) + geom_bar(stat = "identity") + xlab("Purpose") + ylab("Loan Amount") + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#Loans by grade
+table(lcData4m$grade, lcData4m$loan_status)
+ggplot(lcData4m, aes(x = grade, fill = grade)) + geom_bar(width = 0.5) + facet_wrap(~loan_status) + xlab("Grade") + ylab("Loan Count")
+#Avg amounts by grade
+graph1 <- lcData4m %>% group_by(grade) %>% summarize(mean(loan_amnt))
+graph1
+ggplot(graph1) + aes(x = graph1$grade, y = graph1$`mean(loan_amnt)`, fill = graph1$grade, color = graph1$grade) + geom_bar(stat = "identity") + xlab("Grade") + ylab("Loan Amount")
+#Variation of defaults by purpose
+table(lcData4m$purpose, lcData4m$loan_status)
+ggplot(lcData4m, aes(x = purpose)) + geom_bar(width = 0.5) + facet_wrap(~loan_status) + xlab("Purpose") + ylab("Total Count") + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+#Percentage annual return
+lcData4m$returnRateAnnual <- ((lcData4m$total_pymnt -lcData4m$loan_amnt)/lcData4m$loan_amnt)*(12/36)*100
+summary(lcData4m$returnRateAnnual)
+#Comparison of average return values with the average interest_rate on loans
+mean(lcData4m$returnRateAnnual)
+mean(lcData4m$int_rate)
+#Variation of returns by grade
+group_RetunRate <- lcData4m %>% group_by(grade) %>% summarise(mean(returnRateAnnual))
+ggplot(group_RetunRate)+ aes(x=group_RetunRate$grade, y= group_RetunRate$`mean(returnRateAnnual)`, fill = group_RetunRate$grade, color = group_RetunRate$grade) + geom_bar(stat = "identity") + xlab("Grade") + ylab("Return Rate")
+#Variation of returns by sub grade
+subgroup_ReturnRate <- lcData4m %>% group_by(sub_grade) %>% summarise(mean(returnRateAnnual))
+ggplot(subgroup_ReturnRate)+ aes(x=subgroup_ReturnRate$sub_grade, y= subgroup_ReturnRate$`mean(returnRateAnnual)`, fill = subgroup_ReturnRate$sub_grade, color = subgroup_ReturnRate$sub_grade) + geom_bar(stat = "identity") + xlab("Sub_Grade") + ylab("Return Rate")
+#New derived attributes
+#Proportion of sat bank acct
+lcData4m$propSatBC <- ifelse(lcData4m$num_bc_tl>0, lcData4m$num_bc_sats/lcData4m$num_bc_tl, 0)
+graph1 <- lcData4m %>% group_by(grade) %>% summarize(mean(propSatBC))
+ggplot(graph1) + aes(x=graph1$grade, y=graph1$`mean(propSatBC)`, fill = graph1$grade) + geom_bar(stat = "identity") + xlab("Grade") + ylab("Mean(Proportion of Sat Bank Card)")
+#Proportion of open bal acct
+lcData4m$propOpenAcct <- ifelse(lcData4m$total_acc>0, lcData4m$open_acc/lcData4m$total_acc, 0)
+graph1 <- lcData4m %>% group_by(grade) %>% summarize(mean(propOpenAcct))
+ggplot(graph1) + aes(x=graph1$grade, y=graph1$`mean(propOpenAcct)`, fill = graph1$grade) + geom_bar(stat = "identity") + xlab("Grade") + ylab("Mean(Proportion of Open Bal Acct)")
+#Data Leakage
+#Separating columns that have NA greater than 60%
+NaData <- lcData4m[, colMeans(is.na(lcData4m)) > 0.60]
+NonNaData <- lcData4m[, colMeans(is.na(lcData4m)) < 0.60]
+ZeroVar <- names(NonNaData) [nearZeroVar(NonNaData)]
+ZeroVar
+#Removing variables that can cause data leakage
+NonNaData <- NonNaData %>% select(-c(funded_amnt,term,funded_amnt_inv,emp_title,emp_length,home_ownership,issue_d,pymnt_plan,title,zip_code,addr_state,earliest_cr_line,inq_last_6mths,out_prncp,out_prncp_inv,total_pymnt,total_pymnt_inv,total_rec_prncp,total_rec_int,total_rec_late_fee,recoveries,collection_recovery_fee,last_pymnt_d,last_pymnt_amnt,last_credit_pull_d,last_fico_range_high,last_fico_range_low,collections_12_mths_ex_med,policy_code,application_type,bc_util,hardship_flag))
+#Removing the new derived attributes and the variables used to calculate them as they will cause data leakage
+NonNaData <- NonNaData %>% select(-c(num_bc_sats, num_bc_tl, open_acc, returnRateAnnual, propSatBC, propOpenAcct))
+#Are there missing values?
+any(is.na(NonNaData))
+#proportion of missing values in different variables
+per <- function(x) {sum(is.na(x))/length(x)*100}
+apply(NonNaData, 2, per)
+#Handling missing values
+NA0to60 <- NonNaData[, colMeans(is.na(NonNaData)) > 0.00]
+apply(NA0to60, 2, per)
+#Handling mths_since_last_delinq
+NonNaData <- NonNaData %>% mutate(mths_since_last_delinq = replace(mths_since_last_delinq, is.na(mths_since_last_delinq), 500))
+#Handling bc_open_to_buy
+a <- is.numeric(median(NonNaData$bc_open_to_buy))
+NonNaData <- NonNaData %>% mutate(bc_open_to_buy = replace(bc_open_to_buy, is.na(bc_open_to_buy), a))
+#Handling revol_util
+NonNaData$revol_util <- as.character(NonNaData$revol_util)
+NonNaData$revol_util <- as.numeric(substr(NonNaData$revol_util, 1, nchar(NonNaData$revol_util)-1))
+b = is.numeric(median(NonNaData$revol_util))
+NonNaData <- NonNaData %>% mutate(revol_util = replace(revol_util, is.na(revol_util), b))
+#Handling mths_since_recent_bc
+c <- is.numeric(median(NonNaData$mths_since_recent_bc))
+NonNaData <- NonNaData %>% mutate(mths_since_recent_bc = replace(mths_since_recent_bc, is.na(mths_since_recent_bc), c))
+#Handling mths_since_recent_inq
+d <- is.numeric(median(NonNaData$mths_since_recent_inq))
+NonNaData <- NonNaData %>% mutate(mths_since_recent_inq = replace(mths_since_recent_inq, is.na(mths_since_recent_inq), d))
+#Handling num_tl_120dpd_2m
+e <- is.numeric(median(NonNaData$num_tl_120dpd_2m))
+NonNaData <- NonNaData %>% mutate(num_tl_120dpd_2m = replace(num_tl_120dpd_2m, is.na(num_tl_120dpd_2m), e))
+#Handling percent_bc_gt_75
+f <- is.numeric(median(NonNaData$percent_bc_gt_75))
+NonNaData <- NonNaData %>% mutate(percent_bc_gt_75 = replace(percent_bc_gt_75, is.na(percent_bc_gt_75), f))
+#Handling mo_sin_old_il_acct
+g <- is.numeric(median(NonNaData$mo_sin_old_il_acct))
+NonNaData <- NonNaData %>% mutate(mo_sin_old_il_acct = replace(mo_sin_old_il_acct, is.na(mo_sin_old_il_acct), g))
+#Checking if there are any NA values left
+any(is.na(NonNaData))
+#Converting columns having percentage to numeric values
+NonNaData$int_rate <- as.numeric(sub("%", "", NonNaData$int_rate))
+NonNaData$revol_util <- as.numeric(sub("%", "", NonNaData$revol_util))
+#Training and Test Data Set for Decision Tree (rpart)
+rcount <- nrow(NonNaData)
+trnIndx <- sample(1:rcount, size = round(0.6*rcount), replace=FALSE)
+trainset <- NonNaData[trnIndx, ]
+testset <- NonNaData[-trnIndx, ]
+#Decision Tree model
+DT1 <- rpart(loan_status ~., data=trainset, method="class", parms = list(split = "information"), control = rpart.control(cp=0.0001, minsplit = 30))
+printcp(DT1)
+#Performance Evaluation
+table(pred = predict(DT1,trainset, type='class'), true=trainset$loan_status)
+mean(predict(DT1,trainset, type='class') == trainset$loan_status)
+table(pred = predict(DT1,testset, type='class'), true=testset$loan_status)
+mean(predict(DT1,testset, type='class') == testset$loan_status)
+#Confusion Matrix
+confusionMatrix(predict(DT1,trainset, type='class'), trainset$loan_status, positive="Charged Off")
+confusionMatrix(predict(DT1,testset, type='class'), test$loan_status, positive="Charged Off")
+#ROC and AUC for Decision Tree 
+score=predict(DT1,testset, type="prob")[,"Charged Off"]
+predTest=prediction(score, testset$loan_status, label.ordering = c("Fully Paid", "Charged Off"))
+curve <-performance(predTest, "tpr", "fpr")
+plot(curve)
+abline(a=0, b= 1)
+curve=performance(predTest, "auc")
+curve@y.values
+#Lift Curve for Decision Tree
+Curve1 <-performance(predTest, "lift", "rpp")
+plot(Curve1)
+#Training and Test Data Set for Decision Tree (c5.0)
+rcount <- nrow(NonNaData)
+trnIndx <- sample(1:rcount, size = round(0.7*rcount), replace=FALSE)
+trainset <- NonNaData[trnIndx, ]
+testset <- NonNaData[-trnIndx, ]
+#C5.0 tree for trainset
+ctree <- C5.0(as.factor(trainset$loan_status) ~., data = trainset, method = "class", trials = 50,control = C5.0Control(CF = 0.30,earlyStopping = FALSE))
+#Predict on test data set with default Threshold
+predTest = predict(ctree,testset,type='class')
+#Confusion Matrix for default Threshold
+CM_Testset<- confusionMatrix(predTest, testset$loan_status, positive="Charged Off")
+CM_Testset
+#Prediction for threshold 0.3
+probsTest <- predict(ctree,testset, type='prob')
+threshold <- 0.3
+pred      <- factor( ifelse(probsTest[, "Charged Off"] > threshold, 'Charged Off', 'Fully Paid') )
+pred      <- relevel(pred, "Charged Off")
+#Confusion matrix for threshold=0.3   
+confusionMatrix(pred, testset$loan_status)
+#ROC and AUC for C5.0
+score=predict(ctree,testset, type="prob")[,"Charged Off"]
+predTest=prediction(score, testset$loan_status, label.ordering = c("Fully Paid", "Charged Off"))
+curve <-performance(predTest, "tpr", "fpr")
+plot(curve)
+abline(a=0, b= 1)
+curve=performance(predTest, "auc")
+curve@y.values
+#Lift Curve for c5.0
+Curve1 <-performance(predTest, "lift", "rpp")
+plot(Curve1)
+#Variable importance of c5.0
+C5imp(ctree)
+#Training and Test Data Set for Random Forest
+rcount <- nrow(NonNaData)
+trnIndx <- sample(1:rcount, size = round(0.7*rcount), replace=FALSE)
+trainset <- NonNaData[trnIndx, ]
+testset <- NonNaData[-trnIndx, ]
+#RF Model for trainset
+rfModel = randomForest(factor(trainset$loan_status) ~ ., 
+data=trainset, ntree=50, importance=TRUE )
+#Predict on test data set with default Threshold
+rf_pred <- predict(rfModel,testset)
+#Confusion Matrix for default Threshold
+CM_RF<- confusionMatrix(rf_pred, testset$loan_status, positive="Charged Off")
+CM_RF
+#Prediction for threshold 0.2
+probsTest <- predict(rfModel,testset, type='prob')
+threshold <- 0.2
+pred      <- factor( ifelse(probsTest[, "Charged Off"] > threshold, 'Charged Off', 'Fully Paid') )
+pred      <- relevel(pred, "Charged Off")
+#Confusion matrix for threshold=0.2  
+confusionMatrix(pred, testset$loan_status)
+#ROC and AUC for RF
+score=predict(rfModel,testset, type="prob")[,"Charged Off"]
+predTest=prediction(score, testset$loan_status, label.ordering = c("Fully Paid", "Charged Off"))
+curve <-performance(predTest, "tpr", "fpr")
+plot(curve)
+abline(a=0, b= 1)
+curve=performance(predTest, "auc")
+curve@y.values
+#Lift Curve for RF
+Curve1 <-performance(predTest, "lift", "rpp")
+plot(Curve1)
+#Variable importance and plot of Random Forest
+importance(rfModel)
+varImpPlot(rfModel,type=2)
+#Consolidated ROC Curve
+perfROC_dt1Tst=performance(prediction(predict(rfModel,testset, type="prob")[,2], testset$loan_status), "tpr", "fpr")
+perfRoc_dt2Tst=performance(prediction(predict(ctree,testset, type="prob")[,2], testset$loan_status), "tpr", "fpr")
+perfRoc_rfTst=performance(prediction(predict(DT1,testset, type="prob")[,2], testset$loan_status), "tpr", "fpr")
+plot(perfROC_dt1Tst, col='red')
+plot(perfRoc_dt2Tst, col='blue', add=TRUE)
+plot(perfRoc_rfTst, col='green', add=TRUE)
+legend('bottomright', c('RandomForest','C5.0','Rpart'), lty=1, col=c('red', 'blue','green'))
+#6th Answer
+colnum<-which( colnames(lcData4m)=="last_pymnt_d" )
+lcData4m[complete.cases(lcData4m[colnum , ]),]
+tVar <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+x <- tVar(lcData4m, c("last_pymnt_d"))
+x$last_pymnt_d<-paste(x$last_pymnt_d, "-01", sep = "")
+x$last_pymnt_d<-parse_date_time(x$last_pymnt_d,  "myd")
+x$actualTerm <- ifelse(x$loan_status=="Fully Paid", as.duration(x$issue_d  %--% x$last_pymnt_d)/dyears(1), 3)
+#converting all zeros to NA
+x$actualTerm <- ifelse(x$actualTerm == 0, NA, x$actualTerm)
+#get the mean of return rate
+x$returnRateAnnualThree <- ((x$total_pymnt -x$loan_amnt)/x$loan_amnt)*100*1/x$actualTerm
+x_FullyPaid <- filter(x, x$loan_status == "Fully Paid")
+x_ChargedOff <- filter(x, x$loan_status == "Charged Off")
+avgReturnFP <- mean(x_FullyPaid$returnRateAnnualThree, na.rm = TRUE)
+avgReturnCF <- mean(x_ChargedOff$returnRateAnnualThree, na.rm = TRUE)
+scoreTst=predict(rfModel,testset, type="prob")[,'Fully Paid']
+prLifts <-data.frame(scoreTst)
+prLifts=cbind(prLifts, testset$loan_status)
+prLifts=prLifts[order(-scoreTst) ,]
+prLifts$profits <- ifelse(prLifts$`testset$loan_status`=='Fully Paid', PROFITVAL, COSTVAL)
+prLifts$cumProfits <- cumsum(prLifts$profits)
+plot(prLifts$cumProfits)
+#find the score coresponding to the max profit
+maxProfit= max(prLifts$cumProfits)
+maxProfit_Ind = which.max(prLifts$cumProfits)
+maxProfit_score = prLifts$scoreTst[maxProfit_Ind]
+print(c(maxProfit = maxProfit, scoreTst = maxProfit_score))
+#to compare against the default approach of investing in CD with 2% int
+# (ie. $6 profit out of $100 in 3 years)
+prLifts$cdRet <-6
+prLifts$cumCDRet<- cumsum(prLifts$cdRet)
+plot(prLifts$cumProfit)
+lines(prLifts$cumCDRet, col='red')
